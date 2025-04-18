@@ -3,33 +3,143 @@ import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import { Hono } from "hono";
 import { jsxRenderer } from "hono/jsx-renderer";
-import { vinyls } from "./db/schema";
-import { getDiscogsInformation } from "./libs/discogs"; 
+import { getCookie, setCookie } from "hono/cookie";
+import { users, vinyls } from "./db/schema";
+import { getDiscogsInformation } from "./libs/discogs";
+import { authMiddleware, comparePasswords, generateJWT, hashPassword, verifyJWT } from "./libs/auth";
 import EnterVinyl from "./templates/enterVinyl";
 import GalleryTemplate from "./templates/gallery";
-import { basicAuth } from 'hono/basic-auth'
-
+import LoginTemplate from "./templates/login";
+import RegisterTemplate from "./templates/register";
+import { eq } from "drizzle-orm";
 
 type Bindings = {
   DATABASE_URL: string;
   DISCOGS_KEY: string;
   DISCOGS_SECRET: string;
+  JWT_SECRET: string;
 };
 
-const app = new Hono<{ Bindings: Bindings }>();
+type Variables = {
+  user: {
+    id: number;
+    email: string;
+    name: string;
+  };
+};
+
+const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 app.use("/*", jsxRenderer());
 
-// Custom basic auth middleware
-app.use(
-  '/',
-  basicAuth({
-    username: 'demo',
-    password: 'demo',
-  })
-)
+// Public routes
+app.get("/auth/login", (c) => c.html(<LoginTemplate />));
+app.get("/auth/register", (c) => c.html(<RegisterTemplate />));
 
-app.get("/", (c) => {
+// Auth routes
+app.post("/auth/register", async (c) => {
+  const { name, email, password } = await c.req.parseBody();
+  
+  const sql = neon(c.env.DATABASE_URL);
+  const db = drizzle(sql);
+  
+  // Check if user exists
+  const existingUser = await db.select().from(users).where(eq(users.email, email as string)).limit(1);
+  if (existingUser.length > 0) {
+    return c.html(<RegisterTemplate error="Email already registered" />);
+  }
+  
+  // Create user
+  const hashedPassword = await hashPassword(password as string);
+  const [user] = await db.insert(users).values({
+    name: name as string,
+    email: email as string,
+    password: hashedPassword,
+    settings: {}
+  }).returning();
+  
+  // Generate JWT
+  const token = await generateJWT({
+    id: user.id,
+    email: user.email,
+    name: user.name
+  });
+  
+  // Set cookie and redirect
+  setCookie(c, 'auth', token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax'
+  });
+  return c.redirect('/');
+});
+
+app.post("/auth/login", async (c) => {
+  const { email, password } = await c.req.parseBody();
+  
+  const sql = neon(c.env.DATABASE_URL);
+  const db = drizzle(sql);
+  
+  // Find user
+  const [user] = await db.select().from(users).where(eq(users.email, email as string)).limit(1);
+  if (!user) {
+    return c.html(<LoginTemplate error="Invalid email or password" />);
+  }
+  
+  // Verify password
+  const isValid = await comparePasswords(password as string, user.password);
+  if (!isValid) {
+    return c.html(<LoginTemplate error="Invalid email or password" />);
+  }
+  
+  // Generate JWT
+  const token = await generateJWT({
+    id: user.id,
+    email: user.email,
+    name: user.name
+  });
+  
+  // Set cookie and redirect
+  setCookie(c, 'auth', token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax'
+  });
+  return c.redirect('/');
+});
+
+app.get("/auth/logout", (c) => {
+  setCookie(c, 'auth', '', { maxAge: 0 });
+  return c.redirect('/auth/login');
+});
+
+// Protected routes middleware
+app.use("/*", async (c, next) => {
+  // Skip auth for login and register routes
+  if (c.req.path.startsWith('/auth/')) {
+    return next();
+  }
+  
+  const token = getCookie(c, 'auth');
+  if (!token) {
+    return c.redirect('/auth/login');
+  }
+  
+  try {
+    const user = await verifyJWT(token);
+    c.set('user', user);
+    await next();
+  } catch (e) {
+    return c.redirect('/auth/login');
+  }
+})
+
+// Protected routes
+app.get("/", async (c) => {
+  const user = c.get('user');
+  if (!user) {
+    return c.redirect('/auth/login');
+  }
   return c.html(<EnterVinyl />);
 });
 
