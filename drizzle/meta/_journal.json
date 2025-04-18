@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1745011416577,
+      "tag": "0000_illegal_carmella_unuscione",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1745012673487,
+      "tag": "0001_vengeful_sharon_ventura",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1745016425682,
+      "tag": "0002_safe_micromacro",
+      "breakpoints": true
+    }
+  ]
+}

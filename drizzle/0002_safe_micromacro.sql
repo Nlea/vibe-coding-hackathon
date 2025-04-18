@@ -1,0 +1,1 @@
+ALTER TABLE "vinyls" ADD COLUMN "image_url" text;
